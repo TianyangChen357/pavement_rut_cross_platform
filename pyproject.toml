@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling>=1.26"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pavement-rut-cross-platform"
+version = "0.1.0"
+description = "Cross-platform Python processing of Pathway 3D pavement profiles and 6-ft rut depth."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  { name = "Tianyang Chen" },
+]
+keywords = ["pavement", "rutting", "3dc", "cross-slope"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering",
+]
+dependencies = [
+  "numpy>=1.24",
+]
+
+[project.urls]
+Repository = "https://github.com/TianyangChen357/pavement_rut_cross_platform"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2",
+  "pytest>=8",
+  "pytest-cov>=5",
+  "ruff>=0.9",
+]
+
+[project.scripts]
+pavement-rut = "pavement_rut.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pavement_rut"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
