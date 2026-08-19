@@ -30,6 +30,7 @@ class BatchConfig:
     resume: bool = True
     checkpoint_dir: Path | None = None
     checkpoint_every: int = 1
+    preview_min_severity: int | None = 2
     options: ProcessingOptions = field(default_factory=ProcessingOptions)
 
 
@@ -89,6 +90,7 @@ def _run_set(payload: tuple[Path, Path, Path | None, Path, BatchConfig]) -> Batc
                 resume=config.resume,
                 checkpoint_dir=checkpoint_root,
                 checkpoint_every=config.checkpoint_every,
+                preview_min_severity=config.preview_min_severity,
                 options=config.options,
             )
         )

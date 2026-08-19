@@ -6,6 +6,7 @@ import json
 import os
 import struct
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -241,6 +242,48 @@ def test_export_set_parallel_processes_each_file_once(tmp_path: Path) -> None:
         "11201330005C.3dc",
     ]
     assert sum(row["rows_total"] for row in metadata["diagnostics"]) == 2
+
+
+def test_export_set_writes_grayscale_preview_for_severity_two(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    set_dir = _write_synthetic_set(tmp_path / "data", "112")
+    export_module = importlib.import_module("pavement_rut.app.export_set")
+    monkeypatch.setattr(
+        export_module,
+        "aggregate_rutting",
+        lambda results: SimpleNamespace(
+            left_average_inches=0.6,
+            right_average_inches=0.7,
+            overall_average_inches=0.65,
+            severity=2,
+            left_count=1,
+            right_count=1,
+        ),
+    )
+
+    metadata = export_set(
+        ExportSetConfig(
+            set_dir=set_dir,
+            out_dir=tmp_path / "out",
+            output_name="preview",
+        )
+    )
+
+    preview = tmp_path / "out" / "previews" / "moderate_167404_11201330004C.png"
+    assert preview.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    assert metadata["previews"] == {
+        "enabled": True,
+        "minimum_severity": 2,
+        "format": "calibrated-height grayscale PNG",
+        "directory": str(tmp_path / "out" / "previews"),
+        "generated": 1,
+        "files": [str(preview)],
+    }
+    with Path(metadata["outputs"]["csv"]).open(newline="", encoding="utf-8") as stream:
+        row = next(csv.DictReader(stream))
+    assert row["preview_png"] == str(preview)
 
 
 def test_batch_parallel_isolates_failure_and_writes_summary(tmp_path: Path) -> None:

@@ -56,6 +56,24 @@ def _add_checkpoint_options(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_preview_options(parser: argparse.ArgumentParser) -> None:
+    previews = parser.add_mutually_exclusive_group()
+    previews.add_argument(
+        "--preview-min-severity",
+        type=int,
+        choices=(2, 3),
+        default=2,
+        help="Write calibrated-height grayscale PNG previews at or above this severity (default: 2)",
+    )
+    previews.add_argument(
+        "--no-previews",
+        action="store_const",
+        const=None,
+        dest="preview_min_severity",
+        help="Disable automatic severity-triggered PNG previews",
+    )
+
+
 def _processing_options(args: argparse.Namespace) -> ProcessingOptions:
     return ProcessingOptions(
         lane_left_inches=args.lane_left_inches,
@@ -102,6 +120,7 @@ def _parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--jobs", type=int, default=1, help="Concurrent .3dc files")
     export_parser.add_argument("--progress-every", type=int, default=25)
     _add_checkpoint_options(export_parser)
+    _add_preview_options(export_parser)
     _add_processing_options(export_parser)
 
     batch_parser = subparsers.add_parser("batch", help="Process numeric set directories in parallel")
@@ -114,6 +133,7 @@ def _parser() -> argparse.ArgumentParser:
     batch_parser.add_argument("--limit-files", type=int, default=None, help="Limit files in every set")
     batch_parser.add_argument("--progress-every", type=int, default=25)
     _add_checkpoint_options(batch_parser)
+    _add_preview_options(batch_parser)
     _add_processing_options(batch_parser)
     return parser
 
@@ -209,6 +229,7 @@ def _export(args: argparse.Namespace) -> int:
             resume=args.resume,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_every=args.checkpoint_every,
+            preview_min_severity=args.preview_min_severity,
             options=_processing_options(args),
         )
     )
@@ -230,6 +251,7 @@ def _batch(args: argparse.Namespace) -> int:
             resume=args.resume,
             checkpoint_dir=args.checkpoint_dir,
             checkpoint_every=args.checkpoint_every,
+            preview_min_severity=args.preview_min_severity,
             options=_processing_options(args),
         )
     )

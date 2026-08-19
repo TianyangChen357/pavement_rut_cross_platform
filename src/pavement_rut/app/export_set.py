@@ -32,6 +32,7 @@ from pavement_rut.index import ImageRecord, get_or_build_index
 from pavement_rut.io.calibration import load_calibration
 from pavement_rut.io.three_dc import read_3dc
 from pavement_rut.navigation import NavigationLookup
+from pavement_rut.preview import write_height_preview_png
 from pavement_rut.severity import finite_mean
 
 
@@ -95,6 +96,7 @@ class ExportSetConfig:
     resume: bool = True
     checkpoint_dir: Path | None = None
     checkpoint_every: int = 1
+    preview_min_severity: int | None = 2
     options: ProcessingOptions = field(default_factory=ProcessingOptions)
 
 
@@ -475,6 +477,59 @@ def _selected_records(records: list[ImageRecord], config: ExportSetConfig) -> li
     return selected
 
 
+def _preview_relative_path(result: FileRutResult) -> Path:
+    relative = Path(result.relative_path)
+    if not math.isfinite(result.start_frame) or not float(result.start_frame).is_integer():
+        raise ValueError(f"Preview starting frame must be a finite integer: {result.start_frame!r}")
+    severity_label = {
+        2: "moderate",
+        3: "high",
+    }.get(result.severity)
+    if severity_label is None:
+        raise ValueError(f"Preview severity must be 2 or 3: {result.severity!r}")
+    filename = f"{severity_label}_{int(result.start_frame)}_{relative.stem}.png"
+    return Path("previews") / filename
+
+
+def _export_severity_previews(
+    *,
+    set_dir: Path,
+    out_dir: Path,
+    calibration_path: Path,
+    results: list[FileRutResult],
+    minimum_severity: int | None,
+) -> dict[str, Any]:
+    preview_dir = out_dir / "previews"
+    if minimum_severity is None:
+        return {
+            "enabled": False,
+            "minimum_severity": None,
+            "format": "calibrated-height grayscale PNG",
+            "directory": str(preview_dir),
+            "generated": 0,
+            "files": [],
+        }
+
+    calibration = load_calibration(calibration_path)
+    preview_paths: list[str] = []
+    for result in results:
+        if result.severity < minimum_severity:
+            continue
+        source = set_dir / Path(result.relative_path)
+        destination = out_dir / _preview_relative_path(result)
+        image = read_3dc(source)
+        write_height_preview_png(destination, calibration.apply(image.raw_heights))
+        preview_paths.append(str(destination))
+    return {
+        "enabled": True,
+        "minimum_severity": minimum_severity,
+        "format": "calibrated-height grayscale PNG",
+        "directory": str(preview_dir),
+        "generated": len(preview_paths),
+        "files": preview_paths,
+    }
+
+
 def _process_records(
     set_dir: Path,
     calibration_path: Path,
@@ -564,6 +619,8 @@ def export_set(config: ExportSetConfig) -> dict[str, Any]:
         raise ValueError("progress_every must be positive")
     if config.checkpoint_every <= 0:
         raise ValueError("checkpoint_every must be positive")
+    if config.preview_min_severity is not None and config.preview_min_severity not in {2, 3}:
+        raise ValueError("preview_min_severity must be 2, 3, or None")
 
     set_dir = config.set_dir.expanduser().resolve()
     out_dir = config.out_dir.expanduser().resolve()
@@ -690,6 +747,19 @@ def export_set(config: ExportSetConfig) -> dict[str, Any]:
             raise RuntimeError("Not every selected .3dc file has a checkpointed result")
         completed_results = [result for result in file_results if result is not None]
 
+        previews = _export_severity_previews(
+            set_dir=set_dir,
+            out_dir=out_dir,
+            calibration_path=calibration_path,
+            results=completed_results,
+            minimum_severity=config.preview_min_severity,
+        )
+        preview_by_source = {
+            result.relative_path: str(out_dir / _preview_relative_path(result))
+            for result in completed_results
+            if config.preview_min_severity is not None and result.severity >= config.preview_min_severity
+        }
+
         navigation = NavigationLookup(set_dir)
         properties: list[dict[str, Any]] = []
         features: list[dict[str, Any]] = []
@@ -712,6 +782,7 @@ def export_set(config: ExportSetConfig) -> dict[str, Any]:
                 "cross_slope_count": result.cross_slope_count,
                 "cross_slope_error_count": result.cross_slope_error_count,
                 "severity": result.severity,
+                "preview_png": preview_by_source.get(result.relative_path),
             }
             properties.append(row)
             severity_counts[str(result.severity)] = severity_counts.get(str(result.severity), 0) + 1
@@ -778,6 +849,7 @@ def export_set(config: ExportSetConfig) -> dict[str, Any]:
             "files_partial": files_partial,
             "files_failed": files_failed,
             "severity_counts": severity_counts,
+            "previews": previews,
             "diagnostics": [asdict(result) for result in completed_results],
             "checkpoint": {
                 "resume_requested": config.resume,

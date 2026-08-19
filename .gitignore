@@ -31,6 +31,7 @@ gpsdis.*
 heading.*
 outputs/
 output/
+reports/
 .cache/
 .checkpoints/
 indexes/

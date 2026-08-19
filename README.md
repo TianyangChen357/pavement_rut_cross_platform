@@ -76,6 +76,14 @@ pavement-rut batch \
   --jobs 6
 ```
 
+By default, `export-set` and `batch` also write a calibrated-height grayscale
+PNG directly in `OUT_DIR/previews` for every `.3dc` file whose file-level severity is
+2 or 3. Lower calibrated elevations are darker and higher elevations are
+lighter. Use `--preview-min-severity` to change the threshold or `--no-previews`
+to disable preview generation. Preview names use
+`moderate_FRAME_3DCNAME.png` for severity 2 and
+`high_FRAME_3DCNAME.png` for severity 3.
+
 By default, each set is expected to contain `3D_Camera.cal`; optional navigation
 files are named `gpsdis.<set>` and `heading.<set>`. The `.3dc` files may be in
 nested directories. Use `--calibration` to select a different calibration.
@@ -85,6 +93,25 @@ checkpoints by default. Checkpoints live below `OUT_DIR/.checkpoints`; use
 `--no-resume` to start a new journal or `--checkpoint-dir` to place them on a
 separate filesystem. A checkpoint is reused only when the source identity,
 calibration, and processing options match.
+
+For imbalanced datasets, run sets sequentially while parallelizing `.3dc`
+files within each set. The full-run helper records per-set and total wall time,
+sums parent and worker user/system CPU time, and reports a CPU-time-derived
+speedup proxy (`aggregate CPU time / wall time`) and efficiency
+(`speedup / N`) without rerunning a serial baseline:
+
+```bash
+python tools/run_full_export.py \
+  --data-root /data/NC_2018_D11 \
+  --out-dir /work/rut/NC_2018_D11 \
+  --jobs 32 \
+  --checkpoint-every 25
+```
+
+Each production set is written to `OUT_DIR/set_NUMBER`. The continuously
+updated performance outputs are `full_run_summary.json` and
+`full_run_report.txt`. The report clearly labels the speedup as a CPU
+concurrency/utilization metric rather than a measured `T1 / TN` comparison.
 
 See [long-running exports](docs/operations.md) for checkpoint durability,
 immutable-input requirements, parallel-worker guidance, failure semantics, and
@@ -103,7 +130,9 @@ excluded by `.gitignore`.
 - UTF-8 CSV with `set`, source identity, start frame, navigation, left/right/
   overall rut depth, cross-slope means/counts, and severity; and
 - strict JSON metadata containing processing options, diagnostics, counts,
-  checkpoint provenance, and output paths.
+  checkpoint provenance, preview provenance, and output paths; and
+- calibrated-height grayscale PNG previews for files meeting the configured
+  severity threshold (2 by default).
 
 Rut, profile, and straightedge dimensions are inches.
 `cross_slope_average_percent` and `cross_slope_average_angle_degrees` are the
@@ -151,6 +180,21 @@ ruff check .
 ruff format --check .
 python -m build
 ```
+
+## Changelog
+
+### 2026-08-19
+
+- Added calibrated-height grayscale PNG previews for moderate- and
+  high-severity `.3dc` results, including CLI controls, metadata, and exported
+  preview paths.
+- Added a resumable full-survey export helper with per-set timing, aggregate
+  CPU utilization metrics, efficiency reporting, and continuously updated
+  run summaries.
+- Added utilities to flatten preview directories and build combined GeoJSON
+  plus an interactive MapLibre severity map across survey sets.
+- Expanded automated coverage for preview encoding, preview export behavior,
+  production-run performance metrics, and generated-output release hygiene.
 
 The oracle exporter is a Windows-only development tool, not a runtime
 dependency:
