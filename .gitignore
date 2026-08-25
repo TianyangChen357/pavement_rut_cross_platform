@@ -37,6 +37,13 @@ reports/
 indexes/
 logs/
 
+# Local presentations and exported report documents.
+*.pptx
+*.pdf
+
+# Accidental browser/remote download saved without its PDF extension.
+tchen19@hpc.charlotte.edu
+
 # Proprietary/native binaries are not part of this implementation.
 *.dll
 *.exe
