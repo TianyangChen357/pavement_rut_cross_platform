@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 
+import pavement_rut.domain.shoulder as shoulder_module
 from pavement_rut.domain.models import LaneGeometry, ReducedProfile
 from pavement_rut.domain.shoulder import remove_shoulders, shoulder_trim_indices
 
@@ -21,6 +22,20 @@ def test_shoulder_helpers_are_exported_from_domain_package() -> None:
 
     assert domain.remove_shoulders is remove_shoulders
     assert domain.shoulder_trim_indices is shoulder_trim_indices
+
+
+@pytest.mark.parametrize("seed", range(12))
+def test_accelerated_shoulder_trim_is_exactly_equivalent(seed: int) -> None:
+    generator = np.random.default_rng(seed)
+    x = np.cumsum(generator.uniform(0.08, 0.14, size=1536), dtype=np.float64)
+    y = np.cumsum(generator.normal(0.0, 0.018, size=1536), dtype=np.float64)
+    profile = ReducedProfile(x, y, original_point_count=1536)
+    lane = LaneGeometry(float(x[20]), float(x[-20]))
+
+    expected = shoulder_module._shoulder_trim_indices_python(profile, lane)
+    actual = shoulder_trim_indices(profile, lane)
+
+    assert actual == expected
 
 
 def test_flat_profile_uses_strict_open_lane_edges() -> None:

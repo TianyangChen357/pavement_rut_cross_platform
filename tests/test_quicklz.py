@@ -4,6 +4,7 @@ import struct
 
 import pytest
 
+import pavement_rut.io.quicklz as quicklz_module
 from pavement_rut.io.quicklz import QuickLZError, decompress, parse_header
 
 
@@ -46,6 +47,18 @@ def test_decode_level1_match_with_overlap() -> None:
     block = bytes([0x47]) + struct.pack("<II", len(body) + 9, 16) + body
 
     assert decompress(block) == b"abcabcabcabcWXYZ"
+
+
+def test_level1_dispatch_is_byte_exact_against_python_reference() -> None:
+    body = bytes.fromhex("08 00 00 80") + b"abc" + bytes.fromhex("77 45") + b"WXYZ"
+    block = bytes([0x47]) + struct.pack("<II", len(body) + 9, 16) + body
+    source = memoryview(block)
+    header = parse_header(source)
+
+    expected = quicklz_module._decompress_level1_python(source, header)
+    actual = quicklz_module._decompress_level1(source, header)
+
+    assert actual == expected
 
 
 @pytest.mark.parametrize(

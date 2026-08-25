@@ -50,6 +50,25 @@ python -m pip install .
 Use `python -m pip install -e ".[dev]"` instead when developing or running the
 repository test suite.
 
+For production exports, install the optional Numba kernels for shoulder
+detection, the Rut-bar upper concave hull and footprint search, and the
+QuickLZ level-1 decoder:
+
+```bash
+python -m pip install ".[fast]"
+```
+
+The first batch preloads cached machine code before worker processes start.
+If Numba is unavailable or initialization fails, processing automatically uses
+the bit-for-bit-compatible pure-Python path. Set `PAVEMENT_RUT_DISABLE_JIT=1`
+to force that fallback for comparison or troubleshooting.
+
+Check whether acceleration is active in the current environment with:
+
+```bash
+python -c "from pavement_rut.acceleration import acceleration_status; print(acceleration_status())"
+```
+
 ## Quick start
 
 Inspect one file without writing output:
@@ -182,6 +201,17 @@ python -m build
 ```
 
 ## Changelog
+
+### 2026-08-25
+
+- Added optional cached Numba JIT kernels for the Rut-bar upper concave hull,
+  shoulder detection, continuous footprint-gap search, and QuickLZ level-1
+  decoder, with parent-process prewarming, defensive fallback, and exact-output
+  differential coverage.
+- Reused each successful shoulder trim across cross-slope and Rut-bar
+  calculations instead of repeating the same geometry pass.
+- Reduced repeated Rut-bar work by caching unchanged support-window hulls and
+  replacing mask construction with sorted profile slices.
 
 ### 2026-08-19
 

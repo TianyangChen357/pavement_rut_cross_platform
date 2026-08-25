@@ -10,6 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final
 
+import numpy as np
+
+from pavement_rut.acceleration import try_decompress_quicklz_level1
+
 _LONG_HEADER_SIZE: Final = 9
 _SHORT_HEADER_SIZE: Final = 3
 _HASH_VALUES: Final = 4096
@@ -101,7 +105,7 @@ def _update_hash_table(
     return last_hashed
 
 
-def _decompress_level1(source: memoryview, header: QuickLZHeader) -> bytes:
+def _decompress_level1_python(source: memoryview, header: QuickLZHeader) -> bytes:
     source_end = header.compressed_size
     output_size = header.decompressed_size
     destination = bytearray(output_size)
@@ -183,6 +187,43 @@ def _decompress_level1(source: memoryview, header: QuickLZHeader) -> bytes:
             source_position += 1
             control_word >>= 1
         return bytes(destination)
+
+
+def _raise_fast_decoder_error(status: int, position: int, value: int) -> None:
+    if status == 1:
+        raise QuickLZError("invalid zero QuickLZ control word")
+    if status == 2:
+        raise QuickLZError(f"truncated QuickLZ block while reading control word at byte {position}")
+    if status == 3:
+        raise QuickLZError(f"truncated QuickLZ block while reading level-1 token at byte {position}")
+    if status == 4:
+        raise QuickLZError(f"truncated QuickLZ block while reading extended match length at byte {position}")
+    if status == 5:
+        raise QuickLZError(f"invalid QuickLZ match offset {value} at output byte {position}")
+    if status == 6:
+        raise QuickLZError(f"invalid QuickLZ match length {value} at output byte {position}")
+    if status == 7:
+        raise QuickLZError("truncated QuickLZ literal")
+    if status == 8:
+        raise QuickLZError(f"truncated QuickLZ block while reading literal look-ahead at byte {position}")
+    if status == 9:
+        raise QuickLZError("truncated final QuickLZ control word")
+    if status == 10:
+        raise QuickLZError("truncated final QuickLZ literal")
+    if status == 11:
+        raise QuickLZError(f"invalid decompressed hash sequence at output byte {position}")
+    raise QuickLZError(f"unknown accelerated QuickLZ decoder status {status}")
+
+
+def _decompress_level1(source: memoryview, header: QuickLZHeader) -> bytes:
+    source_array = np.frombuffer(source, dtype=np.uint8)
+    fast_result = try_decompress_quicklz_level1(source_array, header.header_size, header.decompressed_size)
+    if fast_result is None:
+        return _decompress_level1_python(source, header)
+    destination, status, position, value = fast_result
+    if status != 0:
+        _raise_fast_decoder_error(status, position, value)
+    return destination.tobytes()
 
 
 def decompress(

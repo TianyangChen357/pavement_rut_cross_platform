@@ -15,6 +15,8 @@ import math
 
 import numpy as np
 
+from pavement_rut.acceleration import try_maximum_footprint_gap, try_upper_concave_hull_indices
+
 from .models import LaneGeometry, ReducedProfile, RutBarResult, WheelPathRut, WheelSide
 from .shoulder import remove_shoulders
 
@@ -23,29 +25,51 @@ DEFAULT_RUT_PATH_WIDTH_INCHES = 44.29134
 DEFAULT_RUT_PATH_HALF_WIDTH_INCHES = 22.14567
 DEFAULT_WHEEL_PATH_CENTER_OFFSET_INCHES = 34.448819
 DEFAULT_MEASUREMENT_WIDTH_INCHES = 4.0
+_HULL_ROUNDING_TOLERANCE = 32.0 * np.finfo(np.float64).eps
+
+
+def _upper_concave_hull_indices_python(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Pure-Python least-concave-majorant hull, retained as the fallback."""
+    hull: list[int] = []
+    append = hull.append
+    pop = hull.pop
+    x_values = x
+    y_values = y
+    tolerance = _HULL_ROUNDING_TOLERANCE
+    for index in range(x_values.size):
+        x_index = float(x_values[index])
+        y_index = float(y_values[index])
+        while len(hull) >= 2:
+            first, second = hull[-2], hull[-1]
+            first_x = float(x_values[first])
+            second_x = float(x_values[second])
+            first_y = float(y_values[first])
+            second_y = float(y_values[second])
+            first_term = (second_x - first_x) * (y_index - second_y)
+            second_term = (second_y - first_y) * (x_index - second_x)
+            cross = first_term - second_term
+            scale = max(
+                1.0,
+                abs(first_term),
+                abs(second_term),
+            )
+            # Concavity requires successively non-increasing segment slopes.
+            # Removing collinear middle points gives deterministic end contacts.
+            if cross >= -tolerance * scale:
+                pop()
+            else:
+                break
+        append(index)
+    return np.asarray(hull, dtype=np.int64)
 
 
 def _upper_concave_hull_indices(x: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Indices of the least concave majorant's vertices, left to right."""
 
-    hull: list[int] = []
-    for index in range(x.size):
-        while len(hull) >= 2:
-            first, second = hull[-2], hull[-1]
-            cross = (x[second] - x[first]) * (y[index] - y[second]) - (y[second] - y[first]) * (x[index] - x[second])
-            scale = max(
-                1.0,
-                abs((x[second] - x[first]) * (y[index] - y[second])),
-                abs((y[second] - y[first]) * (x[index] - x[second])),
-            )
-            # Concavity requires successively non-increasing segment slopes.
-            # Removing collinear middle points gives deterministic end contacts.
-            if cross >= -32.0 * np.finfo(np.float64).eps * scale:
-                hull.pop()
-            else:
-                break
-        hull.append(index)
-    return np.asarray(hull, dtype=np.int64)
+    fast_result = try_upper_concave_hull_indices(x, y)
+    if fast_result is not None:
+        return fast_result
+    return _upper_concave_hull_indices_python(x, y)
 
 
 def _supporting_line_at(
@@ -53,10 +77,12 @@ def _supporting_line_at(
     y: np.ndarray,
     target_x: float,
     slope_hint: float,
+    *,
+    hull_indices: np.ndarray | None = None,
 ) -> tuple[float, float, int, int]:
     """Return ``(slope, y_at_target, left_contact, right_contact)``."""
 
-    hull = _upper_concave_hull_indices(x, y)
+    hull = _upper_concave_hull_indices(x, y) if hull_indices is None else hull_indices
     hull_x = x[hull]
     if hull.size < 2 or target_x < hull_x[0] or target_x > hull_x[-1]:
         raise ValueError("straightedge center is not bracketed by support points")
@@ -131,7 +157,7 @@ def _piecewise_linear_integral(
     return prefix_area[indices] + y[indices] * offset + 0.5 * segment_slope * np.square(offset)
 
 
-def _maximum_footprint_gap(
+def _maximum_footprint_gap_python(
     x: np.ndarray,
     y: np.ndarray,
     *,
@@ -193,6 +219,45 @@ def _maximum_footprint_gap(
     )
 
 
+def _maximum_footprint_gap(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    center_left: float,
+    center_right: float,
+    measurement_width_inches: float,
+    bar_slope: float,
+    bar_y_at_wheel_center: float,
+    wheel_center: float,
+) -> tuple[float, float, float, int]:
+    """Maximize the footprint gap with an optional fused JIT kernel."""
+
+    if center_right < center_left:
+        raise ValueError("no legal center can contain the complete measurement footprint")
+    fast_result = try_maximum_footprint_gap(
+        x,
+        y,
+        center_left,
+        center_right,
+        measurement_width_inches,
+        bar_slope,
+        bar_y_at_wheel_center,
+        wheel_center,
+    )
+    if fast_result is not None:
+        return fast_result
+    return _maximum_footprint_gap_python(
+        x,
+        y,
+        center_left=center_left,
+        center_right=center_right,
+        measurement_width_inches=measurement_width_inches,
+        bar_slope=bar_slope,
+        bar_y_at_wheel_center=bar_y_at_wheel_center,
+        wheel_center=wheel_center,
+    )
+
+
 def _profile_slope_hint(profile: ReducedProfile, lane: LaneGeometry) -> float:
     mask = (profile.x_inches >= lane.left_edge_inches) & (profile.x_inches <= lane.right_edge_inches)
     x = np.asarray(profile.x_inches[mask], dtype=np.float64)
@@ -237,6 +302,10 @@ def measure_rut_depth(
         slope_hint = _profile_slope_hint(profile, lane_geometry)
     slope = float(slope_hint)
     support_x = support_y = None
+    profile_x = np.asarray(profile.x_inches, dtype=np.float64)
+    profile_y = np.asarray(profile.elevation_inches, dtype=np.float64)
+    cached_support_window: tuple[int, int] | None = None
+    cached_hull: np.ndarray | None = None
     left_contact = right_contact = 0
     y_at_center = float("nan")
 
@@ -246,16 +315,23 @@ def measure_rut_depth(
         half_horizontal_span = (bar_length_inches / 2.0) / math.sqrt(1.0 + slope**2)
         support_left = max(half_lane_left, wheel_center - half_horizontal_span)
         support_right = min(half_lane_right, wheel_center + half_horizontal_span)
-        support_mask = (profile.x_inches >= support_left) & (profile.x_inches <= support_right)
-        support_x = np.asarray(profile.x_inches[support_mask], dtype=np.float64)
-        support_y = np.asarray(profile.elevation_inches[support_mask], dtype=np.float64)
+        support_start = int(np.searchsorted(profile_x, support_left, side="left"))
+        support_stop = int(np.searchsorted(profile_x, support_right, side="right"))
+        support_x = profile_x[support_start:support_stop]
+        support_y = profile_y[support_start:support_stop]
         if support_x.size < 2 or support_x[0] > wheel_center or support_x[-1] < wheel_center:
             return None
+        support_window = (support_start, support_stop)
+        if support_window != cached_support_window:
+            cached_hull = _upper_concave_hull_indices(support_x, support_y)
+            cached_support_window = support_window
+        assert cached_hull is not None
         new_slope, y_at_center, left_contact, right_contact = _supporting_line_at(
             support_x,
             support_y,
             wheel_center,
             slope,
+            hull_indices=cached_hull,
         )
         if math.isclose(new_slope, slope, rel_tol=1e-12, abs_tol=1e-12):
             slope = new_slope
@@ -331,11 +407,14 @@ def measure_profile_rutting(
     bar_length_inches: float = DEFAULT_RUT_BAR_LENGTH_INCHES,
     measurement_width_inches: float = DEFAULT_MEASUREMENT_WIDTH_INCHES,
     remove_lane_shoulders: bool = True,
+    shoulder_removed_profile: ReducedProfile | None = None,
 ) -> RutBarResult:
     """Return left, right, and derived overall rut depths for one profile.
 
     Supply either a :class:`LaneGeometry` or explicit lane edges.  If neither is
     supplied, the first and last reduced-profile x coordinates define the lane.
+    ``shoulder_removed_profile`` lets a caller reuse an identical successful
+    shoulder trim while the slope hint still comes from the original profile.
     """
 
     if lane_geometry is not None and (
@@ -357,7 +436,10 @@ def measure_profile_rutting(
     # finds supports, while its supplied cross-slope hint is calculated from
     # the original reduced profile. Keep those two inputs distinct.
     slope_hint = _profile_slope_hint(profile, lane_geometry)
-    measurement_profile = remove_shoulders(profile, lane_geometry) if remove_lane_shoulders else profile
+    if shoulder_removed_profile is not None:
+        measurement_profile = shoulder_removed_profile
+    else:
+        measurement_profile = remove_shoulders(profile, lane_geometry) if remove_lane_shoulders else profile
     left_result = measure_rut_depth(
         measurement_profile,
         "left",

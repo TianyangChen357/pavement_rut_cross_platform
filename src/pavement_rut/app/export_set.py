@@ -18,6 +18,7 @@ from typing import Any
 
 import numpy as np
 
+from pavement_rut.acceleration import warm_jit_kernels
 from pavement_rut.app.checkpoint import (
     CheckpointStore,
     RecordIdentity,
@@ -28,6 +29,7 @@ from pavement_rut.domain.cross_slope import fit_cross_slope
 from pavement_rut.domain.models import LaneGeometry, TransverseProfile
 from pavement_rut.domain.reduction import ReductionConfig, reduce_profile
 from pavement_rut.domain.rutbar import DEFAULT_RUT_BAR_LENGTH_INCHES, measure_profile_rutting
+from pavement_rut.domain.shoulder import remove_shoulders
 from pavement_rut.index import ImageRecord, get_or_build_index
 from pavement_rut.io.calibration import load_calibration
 from pavement_rut.io.three_dc import read_3dc
@@ -367,8 +369,19 @@ def _process_file(
                 if options.skip_noisy_profiles:
                     profile_results.append(None)
                     continue
+            # Cross-slope and Rut-bar use the same shoulder-trimmed geometry.
+            # Reuse it on the successful path while retaining the original
+            # calls below when trimming fails so diagnostics stay identical.
             try:
-                cross_slope = fit_cross_slope(reduced, lane)
+                shoulder_removed_profile = remove_shoulders(reduced, lane)
+            except (ArithmeticError, ValueError):
+                shoulder_removed_profile = None
+            try:
+                cross_slope = fit_cross_slope(
+                    reduced if shoulder_removed_profile is None else shoulder_removed_profile,
+                    lane,
+                    remove_lane_shoulders=shoulder_removed_profile is None,
+                )
                 if math.isfinite(cross_slope.percent) and math.isfinite(cross_slope.angle_degrees):
                     cross_slope_percentages.append(float(cross_slope.percent))
                     cross_slope_angles_degrees.append(float(cross_slope.angle_degrees))
@@ -382,6 +395,7 @@ def _process_file(
                 reduced,
                 lane,
                 bar_length_inches=options.rut_bar_length_inches,
+                shoulder_removed_profile=shoulder_removed_profile,
             )
             profile_results.append(result)
             rows_ok += 1
@@ -546,6 +560,10 @@ def _process_records(
         raise ValueError("progress_every must be positive")
     if not records:
         return []
+
+    # Compile or load cached machine code once in the parent.  Forked workers
+    # inherit it on POSIX; spawned workers can load Numba's on-disk cache.
+    warm_jit_kernels()
 
     completed = 0
     ordered: list[FileRutResult | None] = [None] * len(records)

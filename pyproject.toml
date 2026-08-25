@@ -34,6 +34,9 @@ dependencies = [
 Repository = "https://github.com/TianyangChen357/pavement_rut_cross_platform"
 
 [project.optional-dependencies]
+fast = [
+  "numba>=0.66,<0.67",
+]
 dev = [
   "build>=1.2",
   "pytest>=8",

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from pavement_rut.acceleration import warm_jit_kernels
 from pavement_rut.app.export_set import ExportSetConfig, ProcessingOptions, export_set
 
 
@@ -207,6 +208,7 @@ def run_batch(config: BatchConfig) -> dict[str, Any]:
     ]
 
     results: list[BatchSetResult] = []
+    warm_jit_kernels()
     if config.jobs == 1:
         for index, payload in enumerate(payloads, start=1):
             result = _run_set(payload)

@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from pavement_rut.acceleration import try_shoulder_trim_indices
+
 from .models import LaneGeometry, ReducedProfile
 
 LOW_SLOPE_THRESHOLD = 0.055
@@ -45,7 +47,7 @@ def _true_runs(mask: np.ndarray) -> list[_SlopeRun]:
     return [_SlopeRun(int(start), int(end)) for start, end in zip(starts, ends, strict=True)]
 
 
-def shoulder_trim_indices(
+def _shoulder_trim_indices_python(
     profile: ReducedProfile,
     lane_geometry: LaneGeometry,
     *,
@@ -126,6 +128,48 @@ def shoulder_trim_indices(
         empty_at = min(retained_start, point_count)
         return empty_at, empty_at
     return retained_start, retained_stop
+
+
+def shoulder_trim_indices(
+    profile: ReducedProfile,
+    lane_geometry: LaneGeometry,
+    *,
+    profile_width_inches: float | None = None,
+) -> tuple[int, int]:
+    """Return the retained half-open slice, using JIT when available."""
+
+    x = np.asarray(profile.x_inches, dtype=np.float64)
+    y = np.asarray(profile.elevation_inches, dtype=np.float64)
+    if x.size < 2:
+        return _shoulder_trim_indices_python(
+            profile,
+            lane_geometry,
+            profile_width_inches=profile_width_inches,
+        )
+    if profile_width_inches is None:
+        if profile.original_point_count is None:
+            profile_width_inches = float(x[-1] - x[0])
+        else:
+            sample_spacing = float(np.median(np.diff(x)))
+            profile_width_inches = sample_spacing * profile.original_point_count
+    if not np.isfinite(profile_width_inches) or profile_width_inches <= 0.0:
+        raise ValueError("profile_width_inches must be finite and positive")
+
+    fast_result = try_shoulder_trim_indices(
+        x,
+        y,
+        lane_geometry.left_edge_inches,
+        lane_geometry.right_edge_inches,
+        lane_geometry.center_inches,
+        profile_width_inches,
+    )
+    if fast_result is not None:
+        return fast_result
+    return _shoulder_trim_indices_python(
+        profile,
+        lane_geometry,
+        profile_width_inches=profile_width_inches,
+    )
 
 
 def remove_shoulders(
